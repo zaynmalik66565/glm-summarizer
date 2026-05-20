@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glm-summarizer"
+version = "0.1.0"
+description = "High cache-hit-rate code summarization tool for GLM models on Huawei Cloud MaaS"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "openai>=1.30.0",
+    "httpx>=0.27.0",
+    "typer>=0.12.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+glm-summarize = "glm_summarizer.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

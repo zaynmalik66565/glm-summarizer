@@ -1,0 +1,51 @@
+#!/bin/bash
+# Git post-commit hook — auto-summarize changed files.
+#
+# Install: copy to .git/hooks/post-commit (or use 'glm-summarize hook install')
+#
+# Requires: MAAS_API_KEY env var or ~/.glm-summarizer/config.yaml
+# Usage:   glm-summarize batch "src/**/*.py" --output summaries/
+#
+# The hook only summarizes files that changed in the latest commit,
+# so overhead is proportional to commit size, not repo size.
+
+set -euo pipefail
+
+# --- Configurable ---
+TEMPLATE="${GLM_SUMMARIZE_TEMPLATE:-file-summary}"
+OUTPUT_DIR="${GLM_SUMMARIZE_OUTPUT:-summaries}"
+MAX_FILES="${GLM_SUMMARIZE_MAX_FILES:-20}"
+# ---
+
+# Get changed files in the latest commit
+CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null || true)
+
+if [ -z "$CHANGED" ]; then
+    echo "[glm-summarize] No changed files, skipping."
+    exit 0
+fi
+
+# Filter to source files only
+SOURCE_FILES=$(echo "$CHANGED" | grep -E '\.(py|js|ts|tsx|jsx|go|rs|java|cpp|c|h|rb|php|swift|kt)$' || true)
+
+if [ -z "$SOURCE_FILES" ]; then
+    echo "[glm-summarize] No source files changed, skipping."
+    exit 0
+fi
+
+# Limit to MAX_FILES to avoid runaway costs
+COUNT=$(echo "$SOURCE_FILES" | wc -l | tr -d ' ')
+if [ "$COUNT" -gt "$MAX_FILES" ]; then
+    echo "[glm-summarize] $COUNT files changed, limiting to $MAX_FILES (set GLM_SUMMARIZE_MAX_FILES to override)"
+    SOURCE_FILES=$(echo "$SOURCE_FILES" | head -n "$MAX_FILES")
+fi
+
+echo "[glm-summarize] Summarizing $COUNT changed file(s)..."
+
+# Run — all files share cache session for max KV-cache reuse
+echo "$SOURCE_FILES" | while read -r f; do
+    glm-summarize file "$f" --template "$TEMPLATE" --output "${OUTPUT_DIR}/$(basename "$f").md" 2>&1 || \
+        echo "[glm-summarize] WARNING: failed to summarize $f"
+done
+
+echo "[glm-summarize] Done."

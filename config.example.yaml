@@ -1,0 +1,33 @@
+# GLM Summarizer configuration example.
+# Copy this to ~/.glm-summarizer/config.yaml or .glm-summarizer.yaml
+# in your project root.
+
+# Required: MaaS API key (or set MAAS_API_KEY env var)
+api_key: ""
+
+# MaaS endpoint (default is Hong Kong region)
+base_url: "https://api-ap-southeast-1.modelarts-maas.com/openai/v1"
+
+# Model ID
+model: "glm-5.1"
+
+# Generation parameters
+max_tokens: 4096
+temperature: 0.3
+
+# Batch processing
+concurrency: 5
+
+# Default prompt template
+template: "file-summary"
+
+# Custom headers (e.g., for routing or tracing)
+extra_headers: {}
+#  X-Trace-Id: your-trace-id
+
+# Custom templates (inline, or use a separate file)
+# templates:
+#   my-custom:
+#     description: "My custom summarizer"
+#     system: "You are..."
+#     user: "Summarize:\n```{language}\n{code}\n```"

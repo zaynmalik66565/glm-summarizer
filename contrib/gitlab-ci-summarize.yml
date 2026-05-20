@@ -1,0 +1,42 @@
+# GitLab CI — auto-summarize merge request changes.
+#
+# Add to: .gitlab-ci.yml (include section):
+#   include:
+#     - local: '.gitlab/ci/summarize.yml'
+#
+# Or copy the job definition into your existing .gitlab-ci.yml.
+
+summarize-mr:
+  stage: review
+  image: python:3.11
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - pip install git+https://github.com/your-org/glm-summarizer.git
+  script:
+    # Get changed files
+    - git diff --name-only origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD > changed.txt
+    - grep -E '\.(py|js|ts|go|rs|java|cpp|rb)$' changed.txt > to_summarize.txt || true
+    - |
+      COUNT=$(wc -l < to_summarize.txt)
+      if [ "$COUNT" -eq 0 ]; then
+        echo "No source files to summarize"
+        exit 0
+      fi
+      if [ "$COUNT" -gt 30 ]; then
+        echo "Too many files ($COUNT), sampling 30"
+        shuf -n 30 to_summarize.txt > sampled.txt
+        mv sampled.txt to_summarize.txt
+      fi
+      echo "Summarizing $(wc -l < to_summarize.txt) files..."
+      cat to_summarize.txt | xargs glm-summarize batch \
+        --template pr-diff \
+        --format markdown \
+        --output summaries/
+  artifacts:
+    paths:
+      - summaries/
+    expire_in: 7 days
+  variables:
+    MAAS_API_KEY: ${MAAS_API_KEY}  # set in GitLab CI/CD variables
+    MAAS_MODEL: glm-5.1
