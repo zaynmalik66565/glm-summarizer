@@ -18,6 +18,7 @@ DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.3
 DEFAULT_CONCURRENCY = 5
 DEFAULT_TEMPLATE = "file-summary"
+DEFAULT_STRATEGY = "affinity"
 
 CONFIG_FILE_NAME = ".glm-summarizer.yaml"
 GLOBAL_CONFIG_DIR = Path.home() / ".glm-summarizer"
@@ -31,6 +32,7 @@ _ENV_MAP = {
     "temperature": "MAAS_TEMPERATURE",
     "concurrency": "MAAS_CONCURRENCY",
     "template": "MAAS_TEMPLATE",
+    "strategy": "MAAS_STRATEGY",
 }
 
 
@@ -78,6 +80,7 @@ class Config:
     temperature: float = DEFAULT_TEMPERATURE
     concurrency: int = DEFAULT_CONCURRENCY
     template: str = DEFAULT_TEMPLATE
+    strategy: str = DEFAULT_STRATEGY
     extra_headers: dict[str, str] = field(default_factory=dict)
     _source: str = "defaults"
 
@@ -115,6 +118,31 @@ class Config:
         h = {"Authorization": f"Bearer {self.api_key}"}
         h.update(self.extra_headers)
         return h
+
+    def save(self, path: Path | None = None) -> Path:
+        """Persist config to a YAML file.
+
+        Args:
+            path: Target path. Defaults to global config file.
+        Returns:
+            The path written to.
+        """
+        target = path or GLOBAL_CONFIG_FILE
+        target.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "concurrency": self.concurrency,
+            "template": self.template,
+            "strategy": self.strategy,
+            "extra_headers": self.extra_headers,
+        }
+        with open(target, "w") as f:
+            yaml.dump(data, f, allow_unicode=True, sort_keys=False)
+        return target
 
     def validate(self) -> list[str]:
         """Check required fields; return list of missing items."""

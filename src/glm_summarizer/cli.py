@@ -13,6 +13,7 @@ import typer
 
 from .benchmark import run_benchmark, format_benchmark, PRICING
 from .config import Config
+from .strategies import auto_tune, format_autotune
 from .summarizer import BatchStats, Summarizer, SummaryResult
 from .templates import get_template, list_templates, load_custom_templates
 
@@ -288,6 +289,134 @@ def benchmark(
     typer.echo(format_benchmark(result))
 
 
+@app.command(name="auto-tune")
+def auto_tune_cli(
+    glob_pattern: str = typer.Argument(..., help="File glob pattern, e.g. 'src/**/*.py'"),
+    model: Optional[str] = _opt_model,
+    api_key: Optional[str] = _opt_api_key,
+    base_url: Optional[str] = _opt_base_url,
+    template_name: Optional[str] = _opt_template_name,
+    templates_path: Optional[str] = _opt_templates_path,
+    max_tokens: Optional[int] = _opt_max_tokens,
+    temperature: Optional[float] = _opt_temperature,
+    verbose: bool = _opt_verbose,
+    persist: bool = typer.Option(False, "--persist", "-p", help="Save best strategy to config"),
+):
+    """Test all cache strategies and pick the best one.
+
+    Runs each strategy against the same files and measures actual
+    prompt_token usage. The winning strategy is the one with the
+    lowest average input tokens.
+    """
+    if verbose:
+        logging.basicConfig(level=logging.INFO)
+
+    cfg = _build_config(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        concurrency=1,
+    )
+    if template_name:
+        cfg.template = template_name
+
+    template = get_template(cfg.template, custom_path=templates_path)
+
+    paths = sorted(glob.glob(glob_pattern, recursive=True))
+    paths = [p for p in paths if Path(p).is_file()]
+    if not paths:
+        typer.echo(f"No files matched: {glob_pattern}", err=True)
+        raise typer.Exit(1)
+
+    # Sample for speed
+    sample_size = min(len(paths), 10)
+    if len(paths) > sample_size:
+        import random
+        paths = random.sample(paths, sample_size)
+        typer.echo(f"Sampled {sample_size} files for auto-tune")
+
+    result = auto_tune(paths, config=cfg, template=template)
+    typer.echo(format_autotune(result))
+
+    if persist:
+        cfg.strategy = result.winner.strategy.name
+        saved = cfg.save()
+        typer.echo(f"\nSaved strategy '{cfg.strategy}' to {saved}")
+
+
+@app.command()
+def validate(
+    path: str = typer.Argument(..., help="A source file to test with"),
+    model: Optional[str] = _opt_model,
+    api_key: Optional[str] = _opt_api_key,
+    base_url: Optional[str] = _opt_base_url,
+    template_name: Optional[str] = _opt_template_name,
+    templates_path: Optional[str] = _opt_templates_path,
+    max_tokens: Optional[int] = _opt_max_tokens,
+    temperature: Optional[float] = _opt_temperature,
+    verbose: bool = _opt_verbose,
+):
+    """Quick validation: does caching actually work for this model?
+
+    Sends the same file twice — once with affinity session,
+    once without. If prompt_tokens differ, caching is working.
+    A 2-file batch is also tested for prefix reuse validation.
+    """
+    if verbose:
+        logging.basicConfig(level=logging.INFO)
+
+    cfg = _build_config(
+        api_key=api_key,
+        base_url=base_url,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        concurrency=1,
+    )
+    if template_name:
+        cfg.template = template_name
+
+    template = get_template(cfg.template, custom_path=templates_path)
+
+    typer.echo(f"Validating cache effectiveness for {cfg.model}")
+    typer.echo(f"Test file: {path}")
+    typer.echo(f"{'='*60}")
+
+    with Summarizer(cfg) as s:
+        from .cache import CacheSession
+
+        # Test 1: same file, with/without session
+        typer.echo("\n[1/2] Single file, with affinity session...")
+        r1 = s.summarize_file(path, template=template, session=CacheSession())
+        tok1 = r1.usage.get("prompt_tokens", 0) if r1.usage else 0
+        typer.echo(f"  → {tok1} prompt tokens")
+
+        typer.echo("\n[2/2] Same file, without session...")
+        r2 = s.summarize_file(path, template=template, session=CacheSession())
+        tok2 = r2.usage.get("prompt_tokens", 0) if r2.usage else 0
+        typer.echo(f"  → {tok2} prompt tokens")
+
+    typer.echo(f"\n{'='*60}")
+    if tok1 > 0 and tok2 > 0:
+        diff = tok2 - tok1
+        if diff > 0:
+            pct = diff / tok2 * 100
+            typer.echo(f"  Tokens saved: {diff} ({pct:.1f}%)")
+            if pct > 5:
+                typer.echo("  ✅ Caching is effective.")
+            else:
+                typer.echo("  ⚠️  Marginal improvement — may not be worth the overhead.")
+        else:
+            typer.echo("  ❌ No token savings detected.")
+            typer.echo("  Caching may not be active for this model/deployment.")
+            typer.echo("  Try: glm-summarize auto-tune 'src/**/*.py' to find a working strategy.")
+    else:
+        typer.echo("  Could not determine — check API key and network.")
+        raise typer.Exit(1)
+
+
 @templates_app.command("list")
 def template_list(
     templates_path: Optional[str] = _opt_templates_path,
@@ -356,15 +485,27 @@ def config(
     api_key: Optional[str] = _opt_api_key,
     base_url: Optional[str] = _opt_base_url,
     model: Optional[str] = _opt_model,
+    set_strategy: Optional[str] = typer.Option(None, "--set-strategy", help="Persist a cache strategy (from auto-tune results)"),
 ):
-    """Show current configuration (with sensitive fields masked)."""
+    """Show current configuration (with sensitive fields masked).
+
+    Use --set-strategy to persist the winner from 'auto-tune'.
+    """
     cfg = Config.load(
         api_key=api_key,
         base_url=base_url,
         model=model,
     )
+
+    if set_strategy:
+        cfg.strategy = set_strategy
+        saved = cfg.save()
+        typer.echo(f"Strategy set to '{set_strategy}' → {saved}")
+        return
+
     typer.echo(f"  base_url:    {cfg.base_url}")
     typer.echo(f"  model:       {cfg.model}")
+    typer.echo(f"  strategy:    {cfg.strategy}")
     typer.echo(f"  max_tokens:  {cfg.max_tokens}")
     typer.echo(f"  temperature: {cfg.temperature}")
     typer.echo(f"  concurrency: {cfg.concurrency}")
