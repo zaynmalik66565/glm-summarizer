@@ -21,7 +21,10 @@ glm-summarize file src/main.py
 glm-summarize batch "src/**/*.py" --output summaries/
 
 # 验证缓存效果
-glm-summarize benchmark "src/**/*.py"
+glm-summarize validate src/main.py
+
+# 自进化：测试所有策略，选出最优
+glm-summarize auto-tune "src/**/*.py" --persist
 ```
 
 ## 配置
@@ -49,7 +52,9 @@ cp config.example.yaml ~/.glm-summarizer/config.yaml
 | `file <path>` | 总结单个文件 |
 | `batch <glob>` | 批量总结，共享缓存会话 |
 | `benchmark <glob>` | A/B 对比缓存效果，输出成本报告 |
-| `config` | 查看当前配置 |
+| `auto-tune <glob>` | 测试所有缓存策略，选最优（可 `--persist`） |
+| `validate <path>` | 快速验证缓存是否对当前模型生效 |
+| `config` | 查看/持久化配置（`--set-strategy`） |
 | `template list` | 列出可用模板 |
 | `template show <name>` | 查看模板内容 |
 | `hook install` | 安装 git hook 到当前仓库 |
@@ -122,6 +127,29 @@ glm-summarize batch "src/**/*.py" --templates my-templates.yaml -t my-review
 - 所有请求共享**相同 system prompt 前缀**，每文件独立请求，避免累积历史导致前缀膨胀
 - 同一批次使用**相同 `X-Conversation-Id`**，路由到同一推理实例
 - 自动检测前缀稳定性，变更时告警
+
+## 自进化机制
+
+工具不知道 GLM 5.1 在你的 MaaS 部署上哪种缓存策略最优。所以它自己测试：
+
+```bash
+# 快速验证：缓存是否生效？
+glm-summarize validate src/main.py
+
+# 全面测试：4 种策略 A/B 对比，选最优
+glm-summarize auto-tune "src/**/*.py" --persist
+```
+
+四种策略：
+
+| 策略 | 原理 |
+|------|------|
+| `affinity` | X-Conversation-Id 固定路由到同一实例 |
+| `prefix-sequential` | 无特殊 header，逐文件处理（最大化同实例复用） |
+| `prefix-concurrent` | 基线组，无缓存优化 |
+| `warmup` | 先发预热请求，再走 affinity |
+
+`auto-tune --persist` 会自动把最优策略写入 `~/.glm-summarizer/config.yaml`，后续 `batch` 命令自动使用。
 
 ## 自动化
 
